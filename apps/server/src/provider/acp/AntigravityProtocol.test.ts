@@ -11,6 +11,8 @@ import {
   classifyAntigravitySubagentToolCall,
   isAntigravityUserInputRequest,
   makeAntigravityUserInputResponse,
+  createAntigravityMessageFilter,
+  makeAntigravitySessionUpdateTransformer,
   normalizeAntigravitySessionUpdate,
   normalizeAntigravityToolCall,
   sanitizeAntigravityToolPayload,
@@ -481,5 +483,34 @@ describe("Antigravity tool results", () => {
       mergeToolCallState(running, parseToolUpdate(commandCompleted).toolCall),
     );
     expect(isAntigravityOpenCommand(completed)).toBe(false);
+  });
+
+  it("sanitizes echoed SYSTEM_MESSAGE telemetry blocks from agent message chunks", () => {
+    const transformer = makeAntigravitySessionUpdateTransformer();
+    const leaked =
+      "The following is a <SYSTEM_MESSAGE> not actually sent by the user. It is provided by the system as important information to pay attention to.\n\n<SYSTEM_MESSAGE>\n[Message] timestamp=2026-09-22T20:00:23Z sender=task-1 content=Task finished\n</SYSTEM_MESSAGE>Here is the real answer.";
+
+    const notification = {
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "agent_message_chunk" as const,
+        content: { type: "text" as const, text: leaked },
+      },
+    };
+
+    const normalized = transformer(notification);
+    expect((normalized.update as any).content.text).toBe("Here is the real answer.");
+  });
+
+  it("sanitizes streamed SYSTEM_MESSAGE blocks across chunk boundaries", () => {
+    const filter = createAntigravityMessageFilter();
+    expect(filter("Before ")).toBe("Before ");
+    expect(
+      filter(
+        "The following is a <SYSTEM_MESSAGE> not actually sent by the user.\n\n<SYSTEM_MESSAGE>\n[Message] part 1",
+      ),
+    ).toBe("");
+    expect(filter("\npart 2\nOutput: [mobile] OK\n")).toBe("");
+    expect(filter("</SYSTEM_MESSAGE> After")).toBe(" After");
   });
 });

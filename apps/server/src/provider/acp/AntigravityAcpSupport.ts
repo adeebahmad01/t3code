@@ -23,7 +23,7 @@ import {
   makeAntigravityStdoutTransform,
 } from "../antigravityAuthSupport.ts";
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
-import { normalizeAntigravitySessionUpdate } from "./AntigravityProtocol.ts";
+import { makeAntigravitySessionUpdateTransformer } from "./AntigravityProtocol.ts";
 
 export interface AntigravityAcpRuntimeInput extends Omit<
   AcpSessionRuntime.AcpSessionRuntimeOptions,
@@ -78,7 +78,7 @@ export const makeAntigravityAcpRuntime = Effect.fn("makeAntigravityAcpRuntime")(
       onStderr: makeAntigravityStderrHandler(
         input.onAuthorizationUrl ? { onAuthorizationUrl: input.onAuthorizationUrl } : {},
       ),
-      transformSessionUpdate: normalizeAntigravitySessionUpdate,
+      transformSessionUpdate: makeAntigravitySessionUpdateTransformer(),
     }).pipe(
       Layer.provide(
         Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, input.childProcessSpawner),

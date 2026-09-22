@@ -297,14 +297,19 @@ function messageStreamRoleOf(messageId: MessageId): MessageStreamRole {
   return messageId.startsWith(REASONING_MESSAGE_ID_PREFIX) ? "reasoning" : "assistant";
 }
 
-function assistantSegmentMessageId(
+export function canonicalAssistantMessageId(rawId: string): MessageId {
+  return MessageId.make(rawId.startsWith("assistant:") ? rawId : `assistant:${rawId}`);
+}
+
+export function assistantSegmentMessageId(
   baseKey: string,
   segmentIndex: number,
   role: MessageStreamRole = "assistant",
 ): MessageId {
   const prefix = role === "reasoning" ? REASONING_MESSAGE_ID_PREFIX : "assistant:";
+  const normalizedBaseKey = baseKey.startsWith(prefix) ? baseKey.slice(prefix.length) : baseKey;
   return MessageId.make(
-    segmentIndex === 0 ? `${prefix}${baseKey}` : `${prefix}${baseKey}:segment:${segmentIndex}`,
+    segmentIndex === 0 ? `${prefix}${normalizedBaseKey}` : `${prefix}${normalizedBaseKey}:segment:${segmentIndex}`,
   );
 }
 
@@ -2228,8 +2233,8 @@ const make = Effect.gen(function* () {
       const assistantCompletion =
         event.type === "item.completed" && event.payload.itemType === "assistant_message"
           ? {
-              messageId: MessageId.make(
-                `assistant:${event.itemId ?? event.turnId ?? event.eventId}`,
+              messageId: canonicalAssistantMessageId(
+                String(event.itemId ?? event.turnId ?? event.eventId),
               ),
               fallbackText: event.payload.detail,
             }
@@ -2625,8 +2630,8 @@ const make = Effect.gen(function* () {
       checkpointRef: CheckpointRef.make(`provider-diff:${event.eventId}`),
       status: "missing",
       files: [],
-      assistantMessageId: MessageId.make(
-        `assistant:${event.itemId ?? event.turnId ?? event.eventId}`,
+      assistantMessageId: canonicalAssistantMessageId(
+        String(event.itemId ?? event.turnId ?? event.eventId),
       ),
       checkpointTurnCount: maxCheckpointTurnCount(checkpointContext.checkpoints) + 1,
       createdAt: now,

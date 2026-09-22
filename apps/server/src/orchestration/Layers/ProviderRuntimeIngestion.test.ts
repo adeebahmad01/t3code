@@ -61,6 +61,8 @@ import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import {
   ProviderRuntimeIngestionLive,
   splitBufferedAssistantText,
+  canonicalAssistantMessageId,
+  assistantSegmentMessageId,
 } from "./ProviderRuntimeIngestion.ts";
 import { DEFAULT_THREAD_TITLE } from "../threadTitles.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
@@ -5173,5 +5175,22 @@ describe("splitBufferedAssistantText", () => {
       ready: "",
       rest: "```\n- one\n- two\n",
     });
+  });
+});
+
+describe("assistant message id canonicalization and segmentation", () => {
+  it("avoids double-prefixing assistant message IDs", () => {
+    expect(canonicalAssistantMessageId("item-123")).toBe("assistant:item-123");
+    expect(canonicalAssistantMessageId("assistant:item-123")).toBe("assistant:item-123");
+  });
+
+  it("normalizes segments without nesting the prefix", () => {
+    expect(assistantSegmentMessageId("item-123", 0)).toBe("assistant:item-123");
+    expect(assistantSegmentMessageId("assistant:item-123", 0)).toBe("assistant:item-123");
+    expect(assistantSegmentMessageId("item-123", 1)).toBe("assistant:item-123:segment:1");
+    expect(assistantSegmentMessageId("assistant:item-123", 1)).toBe("assistant:item-123:segment:1");
+    expect(assistantSegmentMessageId("reasoning:thought-1", 1, "reasoning")).toBe(
+      "reasoning:thought-1:segment:1",
+    );
   });
 });

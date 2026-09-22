@@ -1202,11 +1202,7 @@ const handleSessionUpdate = ({
     }
     for (const event of parsed.events) {
       if (event._tag === "ToolCallUpdated") {
-        yield* closeActiveAssistantSegment({
-          queue,
-          assistantSegmentRef,
-        });
-        const { merged, decision } = yield* Ref.modify(toolCallsRef, (current) => {
+        const { merged, decision, isNew } = yield* Ref.modify(toolCallsRef, (current) => {
           const tracked = current.get(event.toolCall.toolCallId);
           const previous = tracked?.state;
           const nextToolCall = mergeToolCallState(previous, event.toolCall);
@@ -1228,8 +1224,14 @@ const handleSessionUpdate = ({
               skippedSinceEmit: decision.skippedSinceEmit,
             });
           }
-          return [{ merged: nextToolCall, decision }, next] as const;
+          return [{ merged: nextToolCall, decision, isNew: previous === undefined }, next] as const;
         });
+        if (isNew) {
+          yield* closeActiveAssistantSegment({
+            queue,
+            assistantSegmentRef,
+          });
+        }
         if (!decision.emit) {
           continue;
         }
@@ -1241,6 +1243,9 @@ const handleSessionUpdate = ({
         continue;
       }
       if (event._tag === "ContentDelta") {
+        if (event.text.length === 0) {
+          continue;
+        }
         if (event.text.trim().length === 0) {
           const assistantSegmentState = yield* Ref.get(assistantSegmentRef);
           if (!assistantSegmentState.activeItemId) {

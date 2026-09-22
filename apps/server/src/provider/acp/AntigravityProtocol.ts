@@ -234,38 +234,141 @@ export function sanitizeAntigravityToolPayload(payload: unknown): unknown {
   return sanitizeToolValue(payload, { nodes: 512, text: 64_000 }, 0);
 }
 
-/** The runtime uses this before it retains tool state or dispatches raw callbacks. */
-export function normalizeAntigravitySessionUpdate(
-  notification: EffectAcpSchema.SessionNotification,
-): EffectAcpSchema.SessionNotification {
-  const update = notification.update;
-  if (update.sessionUpdate !== "tool_call" && update.sessionUpdate !== "tool_call_update") {
-    return notification;
-  }
-  const contentBudget = { nodes: 512, text: 32_000 };
-  const content = update.content?.flatMap((entry) => {
-    const decoded = Option.getOrUndefined(
-      decodeToolCallContent(sanitizeToolValue(entry, contentBudget, 0)),
-    );
-    return decoded === undefined ? [] : [decoded];
-  });
-  const meta = sanitizeAntigravityToolPayload(update._meta);
-  return {
-    ...notification,
-    update: {
-      ...update,
-      ...(typeof update.title === "string" ? { title: boundText(update.title) } : {}),
-      ...(update.rawInput !== undefined
-        ? { rawInput: sanitizeAntigravityToolPayload(update.rawInput) }
-        : {}),
-      ...(update.rawOutput !== undefined
-        ? { rawOutput: sanitizeAntigravityToolPayload(update.rawOutput) }
-        : {}),
-      ...(update.content !== undefined ? { content: content ?? [] } : {}),
-      ...(update._meta !== undefined ? { _meta: Predicate.isObject(meta) ? meta : null } : {}),
-    },
+/**
+ * Stateful streaming filter that discards internal Antigravity harness system messages
+ * (e.g. `<SYSTEM_MESSAGE>...</SYSTEM_MESSAGE>` and the system preamble) that the model
+ * may mistakenly echo back into its assistant message or thought stream.
+ */
+export function createAntigravityMessageFilter(): (text: string) => string {
+  let inSystemMessage = false;
+
+  return (text: string): string => {
+    let result = "";
+    let cursor = 0;
+
+    while (cursor < text.length) {
+      if (inSystemMessage) {
+        const closeTagIndex = text.indexOf("</SYSTEM_MESSAGE>", cursor);
+        if (closeTagIndex === -1) {
+          // Entire remainder of text is inside <SYSTEM_MESSAGE>
+          break;
+        }
+        cursor = closeTagIndex + "</SYSTEM_MESSAGE>".length;
+        inSystemMessage = false;
+        continue;
+      }
+
+      const preambleText = "The following is a <SYSTEM_MESSAGE> not actually sent by the user";
+      const preambleIndex = text.indexOf(preambleText, cursor);
+      const openTagIndex = text.indexOf("<SYSTEM_MESSAGE>", cursor);
+
+      let nextIndex = -1;
+      let isPreamble = false;
+
+      if (preambleIndex !== -1 && openTagIndex !== -1) {
+        if (preambleIndex < openTagIndex) {
+          nextIndex = preambleIndex;
+          isPreamble = true;
+        } else {
+          nextIndex = openTagIndex;
+        }
+      } else if (preambleIndex !== -1) {
+        nextIndex = preambleIndex;
+        isPreamble = true;
+      } else if (openTagIndex !== -1) {
+        nextIndex = openTagIndex;
+      }
+
+      if (nextIndex === -1) {
+        result += text.slice(cursor);
+        break;
+      }
+
+      result += text.slice(cursor, nextIndex);
+
+      if (isPreamble) {
+        const afterPreamble = text.indexOf("<SYSTEM_MESSAGE>", nextIndex);
+        if (afterPreamble !== -1) {
+          cursor = afterPreamble + "<SYSTEM_MESSAGE>".length;
+          inSystemMessage = true;
+        } else {
+          const nextNewline = text.indexOf("\n", nextIndex);
+          if (nextNewline !== -1) {
+            cursor = nextNewline + 1;
+          } else {
+            cursor = text.length;
+          }
+        }
+      } else {
+        cursor = nextIndex + "<SYSTEM_MESSAGE>".length;
+        inSystemMessage = true;
+      }
+    }
+
+    return result;
   };
 }
+
+export function makeAntigravitySessionUpdateTransformer(): (
+  notification: EffectAcpSchema.SessionNotification,
+) => EffectAcpSchema.SessionNotification {
+  const filterMessage = createAntigravityMessageFilter();
+  const filterThought = createAntigravityMessageFilter();
+
+  return (notification: EffectAcpSchema.SessionNotification): EffectAcpSchema.SessionNotification => {
+    const update = notification.update;
+    if (update.sessionUpdate === "agent_message_chunk" || update.sessionUpdate === "agent_thought_chunk") {
+      if (update.content.type === "text") {
+        const filter = update.sessionUpdate === "agent_message_chunk" ? filterMessage : filterThought;
+        const filtered = filter(update.content.text);
+        if (filtered !== update.content.text) {
+          return {
+            ...notification,
+            update: {
+              ...update,
+              content: {
+                ...update.content,
+                text: filtered,
+              },
+            },
+          };
+        }
+      }
+      return notification;
+    }
+    if (update.sessionUpdate !== "tool_call" && update.sessionUpdate !== "tool_call_update") {
+      return notification;
+    }
+    const contentBudget = { nodes: 512, text: 32_000 };
+    const content = update.content?.flatMap((entry) => {
+      const decoded = Option.getOrUndefined(
+        decodeToolCallContent(sanitizeToolValue(entry, contentBudget, 0)),
+      );
+      return decoded === undefined ? [] : [decoded];
+    });
+    const meta = sanitizeAntigravityToolPayload(update._meta);
+    return {
+      ...notification,
+      update: {
+        ...update,
+        ...(typeof update.title === "string" ? { title: boundText(update.title) } : {}),
+        ...(update.rawInput !== undefined
+          ? { rawInput: sanitizeAntigravityToolPayload(update.rawInput) }
+          : {}),
+        ...(update.rawOutput !== undefined
+          ? { rawOutput: sanitizeAntigravityToolPayload(update.rawOutput) }
+          : {}),
+        ...(update.content !== undefined ? { content: content ?? [] } : {}),
+        ...(update._meta !== undefined ? { _meta: Predicate.isObject(meta) ? meta : null } : {}),
+      },
+    };
+  };
+}
+
+/** The runtime uses this before it retains tool state or dispatches raw callbacks. */
+export const normalizeAntigravitySessionUpdate: (
+  notification: EffectAcpSchema.SessionNotification,
+) => EffectAcpSchema.SessionNotification = makeAntigravitySessionUpdateTransformer();
 
 function localImagePath(imagePath: string | undefined): string | undefined {
   if (!imagePath || imagePath.length > TOOL_TEXT_LIMIT) {
