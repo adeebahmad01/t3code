@@ -100,9 +100,11 @@ export interface AcpSessionRuntimeOptions {
   /** Transforms provider stdout before protocol parsing and protocol logging. */
   readonly transformStdout?: EffectAcpClient.AcpClientOptions["transformStdout"];
   /** Normalizes provider-specific fields before notification queues or runtime state retain them. */
-  readonly transformSessionUpdate?: (
+  readonly transformSessionUpdate?: ((
     notification: EffectAcpSchema.SessionNotification,
-  ) => EffectAcpSchema.SessionNotification;
+  ) => EffectAcpSchema.SessionNotification) & {
+    readonly reset?: () => void;
+  };
   /** Receives bounded stderr chunks. Redact secrets before logging. A failure closes the runtime. */
   readonly onStderr?: (text: string) => Effect.Effect<void, EffectAcpErrors.AcpError>;
   readonly requestLogger?: (event: AcpSessionRequestLogEvent) => Effect.Effect<void, never>;
@@ -1032,6 +1034,7 @@ export const make = (
                 const started = yield* getStartedState;
                 yield* closeActiveAssistantSegment({ queue: eventQueue, assistantSegmentRef });
                 yield* Ref.set(assistantUpdatesOpenRef, true);
+                options.transformSessionUpdate?.reset?.();
                 const requestPayload = {
                   sessionId: started.sessionId,
                   ...payload,
@@ -1081,6 +1084,7 @@ export const make = (
                 yield* Fiber.interrupt(activePrompt.fiber).pipe(Effect.ignore);
                 yield* Ref.set(activePromptRef, Option.none());
                 yield* Deferred.succeed(activePrompt.completed, undefined);
+                options.transformSessionUpdate?.reset?.();
               }),
           ),
         ),

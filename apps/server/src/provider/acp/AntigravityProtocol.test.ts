@@ -513,4 +513,60 @@ describe("Antigravity tool results", () => {
     expect(filter("\npart 2\nOutput: [mobile] OK\n")).toBe("");
     expect(filter("</SYSTEM_MESSAGE> After")).toBe(" After");
   });
+
+  it("handles closing delimiter split across chunks without dropping the assistant answer", () => {
+    const filter = createAntigravityMessageFilter();
+    expect(filter("<SYSTEM_MESSAGE>secret</SYSTEM_MESS")).toBe("");
+    expect(filter("AGE> real answer")).toBe(" real answer");
+  });
+
+  it("handles opening delimiter split across chunks without leaking telemetry", () => {
+    const filter = createAntigravityMessageFilter();
+    expect(filter("Normal text <SYSTEM_")).toBe("Normal text ");
+    expect(filter("MESSAGE>secret</SYSTEM_MESSAGE> more text")).toBe(" more text");
+  });
+
+  it("handles preamble split across chunks without leaking telemetry", () => {
+    const filter = createAntigravityMessageFilter();
+    expect(filter("Answer: The following is a <SYSTEM_")).toBe("Answer: ");
+    expect(
+      filter(
+        "MESSAGE> not actually sent by the user.\n\n<SYSTEM_MESSAGE>secret</SYSTEM_MESSAGE>Done",
+      ),
+    ).toBe("Done");
+  });
+
+  it("discards through newline when preamble has no subsequent opening tag", () => {
+    const filter = createAntigravityMessageFilter();
+    expect(
+      filter(
+        "The following is a <SYSTEM_MESSAGE> not actually sent by the user\nHere is the answer.",
+      ),
+    ).toBe("Here is the answer.");
+  });
+
+  it("resets filter state at prompt boundary so incomplete prior turns do not swallow text", () => {
+    const transformer = makeAntigravitySessionUpdateTransformer();
+    // Prompt 1 ends unexpectedly while inside <SYSTEM_MESSAGE>
+    transformer({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "<SYSTEM_MESSAGE>unclosed secret" },
+      },
+    });
+
+    // Reset at prompt boundary via user_message_chunk or explicit reset
+    transformer.reset();
+
+    // Prompt 2 assistant text should not be swallowed
+    const nextResponse = transformer({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Legitimate prompt 2 answer." },
+      },
+    });
+    expect((nextResponse.update as any).content.text).toBe("Legitimate prompt 2 answer.");
+  });
 });

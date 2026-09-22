@@ -234,33 +234,77 @@ export function sanitizeAntigravityToolPayload(payload: unknown): unknown {
   return sanitizeToolValue(payload, { nodes: 512, text: 64_000 }, 0);
 }
 
+const OPEN_SYSTEM_MESSAGE_TAG = "<SYSTEM_MESSAGE>";
+const CLOSE_SYSTEM_MESSAGE_TAG = "</SYSTEM_MESSAGE>";
+const SYSTEM_MESSAGE_PREAMBLE = "The following is a <SYSTEM_MESSAGE> not actually sent by the user";
+
+/**
+ * Finds the length of the longest trailing suffix of `str` that matches
+ * a non-empty prefix of any candidate string.
+ */
+function findLongestCandidateSuffix(str: string, candidates: readonly string[]): number {
+  let longest = 0;
+  for (const candidate of candidates) {
+    const maxLen = Math.min(str.length, candidate.length - 1);
+    for (let len = maxLen; len > longest; len--) {
+      if (str.endsWith(candidate.slice(0, len))) {
+        longest = len;
+        break;
+      }
+    }
+  }
+  return longest;
+}
+
+export interface AntigravityMessageFilter {
+  (text: string): string;
+  reset: () => void;
+}
+
 /**
  * Stateful streaming filter that discards internal Antigravity harness system messages
  * (e.g. `<SYSTEM_MESSAGE>...</SYSTEM_MESSAGE>` and the system preamble) that the model
  * may mistakenly echo back into its assistant message or thought stream.
+ *
+ * Partial opening tags, closing tags, and preamble markers are buffered across chunks
+ * so split delimiters do not leak telemetry or swallow assistant answers.
  */
-export function createAntigravityMessageFilter(): (text: string) => string {
+export function createAntigravityMessageFilter(): AntigravityMessageFilter {
   let inSystemMessage = false;
+  let pending = "";
 
-  return (text: string): string => {
+  const reset = (): void => {
+    inSystemMessage = false;
+    pending = "";
+  };
+
+  const filter = (text: string): string => {
+    const textToProcess = pending + text;
+    pending = "";
+
     let result = "";
     let cursor = 0;
 
-    while (cursor < text.length) {
+    while (cursor < textToProcess.length) {
       if (inSystemMessage) {
-        const closeTagIndex = text.indexOf("</SYSTEM_MESSAGE>", cursor);
+        const closeTagIndex = textToProcess.indexOf(CLOSE_SYSTEM_MESSAGE_TAG, cursor);
         if (closeTagIndex === -1) {
-          // Entire remainder of text is inside <SYSTEM_MESSAGE>
+          // Entire remainder of text is inside <SYSTEM_MESSAGE>, except possibly
+          // a trailing partial close tag that might be completed in the next chunk.
+          const remainder = textToProcess.slice(cursor);
+          const suffixLen = findLongestCandidateSuffix(remainder, [CLOSE_SYSTEM_MESSAGE_TAG]);
+          if (suffixLen > 0) {
+            pending = remainder.slice(remainder.length - suffixLen);
+          }
           break;
         }
-        cursor = closeTagIndex + "</SYSTEM_MESSAGE>".length;
+        cursor = closeTagIndex + CLOSE_SYSTEM_MESSAGE_TAG.length;
         inSystemMessage = false;
         continue;
       }
 
-      const preambleText = "The following is a <SYSTEM_MESSAGE> not actually sent by the user";
-      const preambleIndex = text.indexOf(preambleText, cursor);
-      const openTagIndex = text.indexOf("<SYSTEM_MESSAGE>", cursor);
+      const preambleIndex = textToProcess.indexOf(SYSTEM_MESSAGE_PREAMBLE, cursor);
+      const openTagIndex = textToProcess.indexOf(OPEN_SYSTEM_MESSAGE_TAG, cursor);
 
       let nextIndex = -1;
       let isPreamble = false;
@@ -280,46 +324,85 @@ export function createAntigravityMessageFilter(): (text: string) => string {
       }
 
       if (nextIndex === -1) {
-        result += text.slice(cursor);
+        const remainder = textToProcess.slice(cursor);
+        const suffixLen = findLongestCandidateSuffix(remainder, [
+          OPEN_SYSTEM_MESSAGE_TAG,
+          SYSTEM_MESSAGE_PREAMBLE,
+        ]);
+        if (suffixLen > 0) {
+          result += remainder.slice(0, remainder.length - suffixLen);
+          pending = remainder.slice(remainder.length - suffixLen);
+        } else {
+          result += remainder;
+        }
         break;
       }
 
-      result += text.slice(cursor, nextIndex);
+      result += textToProcess.slice(cursor, nextIndex);
 
       if (isPreamble) {
-        const afterPreamble = text.indexOf("<SYSTEM_MESSAGE>", nextIndex);
+        const afterPreamble = textToProcess.indexOf(
+          OPEN_SYSTEM_MESSAGE_TAG,
+          nextIndex + SYSTEM_MESSAGE_PREAMBLE.length,
+        );
         if (afterPreamble !== -1) {
-          cursor = afterPreamble + "<SYSTEM_MESSAGE>".length;
+          cursor = afterPreamble + OPEN_SYSTEM_MESSAGE_TAG.length;
           inSystemMessage = true;
         } else {
-          const nextNewline = text.indexOf("\n", nextIndex);
+          const nextNewline = textToProcess.indexOf("\n", nextIndex);
           if (nextNewline !== -1) {
             cursor = nextNewline + 1;
           } else {
-            cursor = text.length;
+            cursor = textToProcess.length;
           }
         }
       } else {
-        cursor = nextIndex + "<SYSTEM_MESSAGE>".length;
+        cursor = nextIndex + OPEN_SYSTEM_MESSAGE_TAG.length;
         inSystemMessage = true;
       }
     }
 
     return result;
   };
+
+  filter.reset = reset;
+  return filter;
 }
 
-export function makeAntigravitySessionUpdateTransformer(): (
-  notification: EffectAcpSchema.SessionNotification,
-) => EffectAcpSchema.SessionNotification {
+export interface AntigravitySessionUpdateTransformer {
+  (notification: EffectAcpSchema.SessionNotification): EffectAcpSchema.SessionNotification;
+  reset: () => void;
+}
+
+/**
+ * Creates a stateful session update transformer that sanitizes Antigravity tool payloads
+ * and filters leaked system telemetry from assistant message and thought streams.
+ * Resets per-channel streaming filters at prompt boundaries.
+ */
+export function makeAntigravitySessionUpdateTransformer(): AntigravitySessionUpdateTransformer {
   const filterMessage = createAntigravityMessageFilter();
   const filterThought = createAntigravityMessageFilter();
 
-  return (notification: EffectAcpSchema.SessionNotification): EffectAcpSchema.SessionNotification => {
+  const reset = (): void => {
+    filterMessage.reset();
+    filterThought.reset();
+  };
+
+  const transform = (
+    notification: EffectAcpSchema.SessionNotification,
+  ): EffectAcpSchema.SessionNotification => {
     const update = notification.update;
-    if (update.sessionUpdate === "agent_message_chunk" || update.sessionUpdate === "agent_thought_chunk") {
+    if (update.sessionUpdate === "user_message_chunk") {
+      reset();
+      return notification;
+    }
+    if (
+      update.sessionUpdate === "agent_message_chunk" ||
+      update.sessionUpdate === "agent_thought_chunk"
+    ) {
       if (update.content.type === "text") {
-        const filter = update.sessionUpdate === "agent_message_chunk" ? filterMessage : filterThought;
+        const filter =
+          update.sessionUpdate === "agent_message_chunk" ? filterMessage : filterThought;
         const filtered = filter(update.content.text);
         if (filtered !== update.content.text) {
           return {
@@ -363,12 +446,14 @@ export function makeAntigravitySessionUpdateTransformer(): (
       },
     };
   };
+
+  transform.reset = reset;
+  return transform;
 }
 
 /** The runtime uses this before it retains tool state or dispatches raw callbacks. */
-export const normalizeAntigravitySessionUpdate: (
-  notification: EffectAcpSchema.SessionNotification,
-) => EffectAcpSchema.SessionNotification = makeAntigravitySessionUpdateTransformer();
+export const normalizeAntigravitySessionUpdate: AntigravitySessionUpdateTransformer =
+  makeAntigravitySessionUpdateTransformer();
 
 function localImagePath(imagePath: string | undefined): string | undefined {
   if (!imagePath || imagePath.length > TOOL_TEXT_LIMIT) {

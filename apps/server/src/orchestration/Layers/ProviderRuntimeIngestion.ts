@@ -297,10 +297,12 @@ function messageStreamRoleOf(messageId: MessageId): MessageStreamRole {
   return messageId.startsWith(REASONING_MESSAGE_ID_PREFIX) ? "reasoning" : "assistant";
 }
 
+/** Ensures an assistant message identifier carries exactly one `assistant:` prefix. */
 export function canonicalAssistantMessageId(rawId: string): MessageId {
   return MessageId.make(rawId.startsWith("assistant:") ? rawId : `assistant:${rawId}`);
 }
 
+/** Formats a unique segment identifier for assistant or reasoning message parts. */
 export function assistantSegmentMessageId(
   baseKey: string,
   segmentIndex: number,
@@ -309,7 +311,9 @@ export function assistantSegmentMessageId(
   const prefix = role === "reasoning" ? REASONING_MESSAGE_ID_PREFIX : "assistant:";
   const normalizedBaseKey = baseKey.startsWith(prefix) ? baseKey.slice(prefix.length) : baseKey;
   return MessageId.make(
-    segmentIndex === 0 ? `${prefix}${normalizedBaseKey}` : `${prefix}${normalizedBaseKey}:segment:${segmentIndex}`,
+    segmentIndex === 0
+      ? `${prefix}${normalizedBaseKey}`
+      : `${prefix}${normalizedBaseKey}:segment:${segmentIndex}`,
   );
 }
 
