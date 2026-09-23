@@ -536,6 +536,18 @@ describe("Antigravity tool results", () => {
     ).toBe("Done");
   });
 
+  it("buffers incomplete preamble containing embedded opening tag without dropping assistant answer", () => {
+    const filter = createAntigravityMessageFilter();
+    expect(filter("The following is a <SYSTEM_MESSAGE> not actually")).toBe("");
+    expect(filter(" sent by the user\nLegitimate answer")).toBe("Legitimate answer");
+  });
+
+  it("buffers incomplete preamble ending immediately after opening tag", () => {
+    const filter = createAntigravityMessageFilter();
+    expect(filter("Answer: The following is a <SYSTEM_MESSAGE>")).toBe("Answer: ");
+    expect(filter(" not actually sent by the user\nFinal text")).toBe("Final text");
+  });
+
   it("discards through newline when preamble has no subsequent opening tag", () => {
     const filter = createAntigravityMessageFilter();
     expect(

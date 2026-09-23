@@ -1177,6 +1177,9 @@ function isStartupMetadataUpdate(notification: EffectAcpSchema.SessionNotificati
   }
 }
 
+/**
+ * Processes an ACP session notification, manages assistant segments, and dispatches runtime events.
+ */
 const handleSessionUpdate = ({
   queue,
   modeStateRef,
@@ -1288,6 +1291,9 @@ function updateModeState(modeState: AcpSessionModeState, nextModeId: string): Ac
 const assistantItemId = (sessionId: string, runtimeId: string, segmentIndex: number) =>
   `assistant:${sessionId}:runtime:${runtimeId}:segment:${segmentIndex}`;
 
+/**
+ * Ensures an active assistant segment exists, starting a new indexed segment if none is open.
+ */
 const ensureActiveAssistantSegment = ({
   queue,
   assistantSegmentRef,
@@ -1328,6 +1334,9 @@ const ensureActiveAssistantSegment = ({
     ),
   );
 
+/**
+ * Emits a completion event for the currently open assistant segment, if one is active.
+ */
 const closeActiveAssistantSegment = ({
   queue,
   assistantSegmentRef,

@@ -45,6 +45,7 @@ export function isAntigravityUserInputRequest(
   return request.toolCall.toolCallId.startsWith("interaction_");
 }
 
+/** Matches a provider approval decision to the corresponding Antigravity permission option identifier. */
 export function selectAntigravityPermissionOptionId(
   request: EffectAcpSchema.RequestPermissionRequest,
   decision: ProviderApprovalDecision,
@@ -111,10 +112,12 @@ export function antigravityApprovalOptions(
   return options;
 }
 
+/** Creates an isolated string slice copy so V8 does not retain larger source strings in memory. */
 function copyBoundedText(text: string): string {
   return Buffer.from(text, "utf16le").toString("utf16le");
 }
 
+/** Formats and bounds the display label for an Antigravity permission option. */
 function questionLabel(option: EffectAcpSchema.PermissionOption): string {
   const label = option.name.trim() || option.optionId;
   return label.length > QUESTION_LABEL_LIMIT
@@ -175,6 +178,7 @@ export function makeAntigravityUserInputResponse(
   return option ? { outcome: { outcome: "selected", optionId: option.optionId } } : undefined;
 }
 
+/** Bounds text to a maximum length, prepending a truncation marker if the text was shortened. */
 function boundText(text: string, limit = TOOL_TEXT_LIMIT): string {
   return text.length <= limit
     ? text
@@ -186,6 +190,7 @@ interface ToolPayloadBudget {
   text: number;
 }
 
+/** Recursively traverses and bounds tool payload values against node count and string length limits. */
 function sanitizeToolValue(value: unknown, budget: ToolPayloadBudget, depth: number): unknown {
   if (depth > 12 || budget.nodes-- <= 0) {
     return undefined;
@@ -306,21 +311,34 @@ export function createAntigravityMessageFilter(): AntigravityMessageFilter {
       const preambleIndex = textToProcess.indexOf(SYSTEM_MESSAGE_PREAMBLE, cursor);
       const openTagIndex = textToProcess.indexOf(OPEN_SYSTEM_MESSAGE_TAG, cursor);
 
+      const remainder = textToProcess.slice(cursor);
+      const preambleCandidateLen = findLongestCandidateSuffix(remainder, [SYSTEM_MESSAGE_PREAMBLE]);
+      const preambleCandidateStart =
+        preambleCandidateLen > 0 ? textToProcess.length - preambleCandidateLen : -1;
+
+      // If openTagIndex points to the <SYSTEM_MESSAGE> embedded inside an incomplete
+      // preamble at the end of the text, do not treat it as a standalone tag.
+      const effectiveOpenTagIndex =
+        openTagIndex !== -1 &&
+        (preambleCandidateStart === -1 || openTagIndex < preambleCandidateStart)
+          ? openTagIndex
+          : -1;
+
       let nextIndex = -1;
       let isPreamble = false;
 
-      if (preambleIndex !== -1 && openTagIndex !== -1) {
-        if (preambleIndex < openTagIndex) {
+      if (preambleIndex !== -1 && effectiveOpenTagIndex !== -1) {
+        if (preambleIndex < effectiveOpenTagIndex) {
           nextIndex = preambleIndex;
           isPreamble = true;
         } else {
-          nextIndex = openTagIndex;
+          nextIndex = effectiveOpenTagIndex;
         }
       } else if (preambleIndex !== -1) {
         nextIndex = preambleIndex;
         isPreamble = true;
-      } else if (openTagIndex !== -1) {
-        nextIndex = openTagIndex;
+      } else if (effectiveOpenTagIndex !== -1) {
+        nextIndex = effectiveOpenTagIndex;
       }
 
       if (nextIndex === -1) {
@@ -455,6 +473,7 @@ export function makeAntigravitySessionUpdateTransformer(): AntigravitySessionUpd
 export const normalizeAntigravitySessionUpdate: AntigravitySessionUpdateTransformer =
   makeAntigravitySessionUpdateTransformer();
 
+/** Validates and normalizes an image file path from tool output for preview rendering. */
 function localImagePath(imagePath: string | undefined): string | undefined {
   if (!imagePath || imagePath.length > TOOL_TEXT_LIMIT) {
     return undefined;
@@ -476,6 +495,7 @@ function localImagePath(imagePath: string | undefined): string | undefined {
   return /^[a-z][a-z\d+.-]*:/i.test(path) && !/^[a-z]:[\\/]/i.test(path) ? undefined : path;
 }
 
+/** Normalizes tool call payloads, populating command, cwd, exit code, and image paths. */
 export function normalizeAntigravityToolCall(toolCall: AcpToolCallState): AcpToolCallState {
   const input = Option.getOrUndefined(decodeNativeToolFields(toolCall.data.rawInput));
   const output = Option.getOrUndefined(decodeNativeToolFields(toolCall.data.rawOutput));
@@ -562,6 +582,7 @@ export function isAntigravitySubagentReplayStart(rawPayload: unknown): boolean {
   );
 }
 
+/** Extracts and bounds the raw output string from a completed subagent tool call. */
 export function antigravitySubagentOutput(toolCall: AcpToolCallState): string | undefined {
   const output = toolCall.data.rawOutput;
   return typeof output === "string" && output.trim() ? boundText(output.trim()) : undefined;

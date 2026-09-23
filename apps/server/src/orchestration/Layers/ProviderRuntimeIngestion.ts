@@ -293,6 +293,7 @@ type MessageStreamRole = "assistant" | "reasoning";
 
 const REASONING_MESSAGE_ID_PREFIX = "reasoning:";
 
+/** Determines whether a message ID corresponds to reasoning or assistant output. */
 function messageStreamRoleOf(messageId: MessageId): MessageStreamRole {
   return messageId.startsWith(REASONING_MESSAGE_ID_PREFIX) ? "reasoning" : "assistant";
 }

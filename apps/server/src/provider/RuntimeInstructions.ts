@@ -20,6 +20,7 @@ export function buildRuntimeInstructions(runtime: {
   return `<runtime_info>In case you're asked: you are running in T3 Code through the ${harness} harness${modelInfo}${effortInfo}. No need to mention this otherwise. You can embed images and videos in your response using Markdown with absolute file paths.</runtime_info>\n\n${PULL_REQUEST_LINKING_INSTRUCTIONS}\n\n${SYSTEM_TELEMETRY_INSTRUCTIONS}`;
 }
 
+/** Normalizes a string by collapsing consecutive whitespace into single spaces and trimming it. */
 function toSingleLine(value: string): string {
   return value.replaceAll(/\s+/g, " ").trim();
 }
